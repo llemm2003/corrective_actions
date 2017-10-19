@@ -1,0 +1,223 @@
+#!/bin/sh
+#small script to clean up /u01 from alert logs, trace files and large listener logs. 
+#It will employ ADRCI to quickly purge files.
+#To use this file:
+#vi purge.sh
+#paste the content of this script to the file
+#sh ./purge.sh <threshold> 
+#<threshold> is optional, default is 60. Add a number if you want to override the default.
+#Wait for it to complete
+
+
+#RETENTION is 60 days. The script can accept Integer argument and will be converted to Minutes.
+RETENTION=60
+THRESHOLD=85
+FS="/u01"
+CURRENT_USAGE="`df /u01| grep -oE '*[0-9]+%'| cut -d"%" -f1`"
+RAC_NUM=$(grep ASM  /etc/oratab| grep -v '^\#' | awk -F":" '{print $1}' |  awk -F"ASM" '{print $2}')
+
+check_version () {
+if [ `grep -vE '^\#|^\*|^$|ASM|dg' /etc/oratab |head -1| awk -F":" '{print $2}'| grep "11"| wc -l` -eq "1" ]; then
+ echo "11G"
+elif  [ `grep -vE '^\#|^\*|^$|ASM|dg' /etc/oratab |head -1| awk -F":" '{print $2}'| grep "10"| wc -l` -eq "1" ]; then
+ echo "10G"
+elif  [ `grep -vE '^\#|^\*|^$|ASM|dg' /etc/oratab |head -1| awk -F":" '{print $2}'| grep "12"| wc -l` -eq "1" ]; then
+ echo "12C"
+else
+ echo "Unknown Version"
+fi
+}
+get_environment () {
+OR_LINE=$(grep -vE '^\#|^\*|^$|ASM|dg' /etc/oratab |head -1| awk -F":" '{print $1 " " $2}')
+OR_SID=$(echo "$OR_LINE" |awk '{print $1}')
+OR_HOME=$(echo "$OR_LINE" |awk '{print $2}')
+ASM=$(grep -vE '^\#|^\*|^$|dg' /etc/oratab | grep ASM | awk -F":" '{print $1 " " $2}')
+ASM_SID=$(echo $ASM |awk '{print $1}')
+ASM_HOME=$(echo $ASM |awk '{print $2}')
+echo $OR_SID " " $OR_HOME " " $ASM_SID " " $ASM_HOME
+}
+
+GET_SIZE () {
+ FILESIZE=$(ls -l $1| awk '{ print $5 }')
+ echo $FILESIZE
+}
+
+ADRCI_OUT () {
+$ORACLE_HOME/bin/adrci << OCI
+$1
+OCI
+}
+
+#Function to extract values using sqlplus
+connect_to_sql () {
+SQL_OUTPUT=$( $ORACLE_HOME/bin/sqlplus -s / as sysdba<< OCI
+set heading off
+$1
+exit
+OCI
+)
+echo "$SQL_OUTPUT"| grep -v \^$
+}
+
+#Checking if directory extracted from sqlplus exists then calls up function that cleans Qup files more than retention
+CLEAN_FILES () {
+echo "$1" | while read directory
+do
+ [ -d "$directory" ] && CHECK_FILES "$directory"
+done
+}
+
+COMPRESS_LOG () {
+faylnaym="backupfile-`date "+%m_%d_%y_%HH_%M_%S_%N"`"
+mknod "$1$faylnaym" p
+gzip < "$1$faylnaym" > "$1$faylnaym.gz" &  
+cat $1 >> "$1$faylnaym" && > $1
+}
+
+#Check files if there are files more than retention days. backup to zip then remove.
+CHECK_FILES () {
+cd $1
+echo "looking for backup files that can be removed -- Threshold for backup files is RETENTION x 10"
+find . -type f -name 'backupfile*tar*' -mtime +$RETENTION -exec rm -rf {} \; || echo "Backup files removed" && echo "No backup files removed"
+if [ `find . -type f -mtime +$RETENTION ! -name '*gz' |wc -l` -gt "0" ]; then
+ echo "There are files more than the retention in $1"
+ counter=0
+ faylnaym="backupfile-`date "+%m_%d_%y_%HH_%M_%S_%N"`.tar"
+ for files in `find . -type f -mtime +$RETENTION ! -name '*gz'`
+ do
+  if [ "$counter" -lt "100" ]; then
+   echo "Adding $files to $faylnaym"
+   tar rvf $faylnaym $files && rm -rf $files || rm -rf $faylnaym
+   counter=`expr $counter + 1`
+  else
+   gzip $faylnaym
+   faylnaym="backupfile-`date "+%m_%d_%y_%HH_%M_%S_%N"`.tar"
+   counter=0
+  fi
+ done
+ gzip $faylnaym
+else
+ echo "No files to be cleaned in $1"
+fi
+}
+
+purge_oldway () {
+echo "Started at `date`"
+echo "Files above retention or $RETENTION days will be backed up, zipped then remove the original copy"
+[ ! -z "$1" ] && RETENTION="$1"
+OR_LINE=$(grep -vE '^\#|^\*|^$|ASM|dg' /etc/oratab | awk -F":" '{print $1 " " $2}')
+echo "$OR_LINE"| while read line
+do
+ export ORACLE_SID=$(echo $line |awk '{print $1}')
+ export ORACLE_SID=$ORACLE_SID$RAC_NUM
+ export ORACLE_HOME=$(echo $line |awk '{print $2}')
+ echo $ORACLE_SID
+ echo "Checking directories for $ORACLE_SID"
+ #The line below will extract the dump destination used by the databases
+ CLEAN_THIS_DIRECTORY=$(connect_to_sql "select value from v\$parameter where name like '%dump_dest' or name='audit_file_dest';") #added audit directory to be cleaned up.
+ CLEAN_FILES "$CLEAN_THIS_DIRECTORY"
+done
+echo "Completed at `date`"
+}
+
+ADRCI_CLEAN () {
+ ADRCI="$ORACLE_HOME/bin/adrci"
+ ADRCI_OUT=`$ADRCI exec="show homes"| grep -vE 'ADR|Homes:'`
+ echo "Available Oracle Homes in adrci:" 
+ echo "$ADRCI_OUT"
+ for i in `echo "$ADRCI_OUT"`
+ do
+ echo "purging $i"
+ $ADRCI exec="set home $i; purge -age $RETENTION"
+ done
+ LSN_LOG=$($ORACLE_HOME/bin/adrci exec=" show tracefiles listener%log" )
+ for i in `echo "$LSN_LOG"`
+	  do
+	   listener_log=$(echo "$ORACLE_BASE/`echo $i| tr -d ' '`")
+	   FILESIZE=$(GET_SIZE "$listener_log")
+       [ "$FILESIZE" -gt "10000000" ] && echo " $listener_log Is above threshold MB" || echo "$listener_log is Below threshold"
+	   [ "$FILESIZE" -gt "10000000" ] && COMPRESS_LOG "$listener_log"
+	 done
+}
+
+PURGE_ALL () {
+ORAENV_ASK=NO
+ENVIRONMENT=$(get_environment| grep ASM)
+if [ -z "$ENVIRONMENT"  ]; then
+ OR_LINE=$(grep -vE '^\#|^\*|^$|ASM|dg' /etc/oratab | awk -F":" '{print $1 " " $2}')
+ echo "$OR_LINE"| while read line
+ do
+  ADRCI_CLEAN 
+ done
+else
+ export ORACLE_SID=$(echo "$ENVIRONMENT"| awk '{print $1}')
+ . oraenv
+ ADRCI_CLEAN
+fi
+}
+
+#MAIN
+#Retention Default is 60. Change it by using it as an argument in the script.
+[ ! -z "$1" ] && RETENTION="$1"
+CURRENT_USAGE="`df /u01| grep -oE '*[0-9]+%'| cut -d"%" -f1`"
+if [ -f "/etc/oratab" ]; then #Check if this is database server by checking oratab. If there is no oratab, abort #1
+ if [ `grep -vE '^\#|^\*|^$|dg' /etc/oratab 2> /dev/null| wc -l` -gt "0" ]; then #Check if there is database indicated in oratab #2
+  if [ "$CURRENT_USAGE" -ge "$THRESHOLD" ]; then #3
+   echo "$CURRENT_USAGE% used, running purge"
+   a=$(check_version)
+   echo "This version $a"
+   #Checking what version
+   #If 11Gi
+   if [ "$a" =  "11G" ]; then #4
+   purge_oldway  
+   PURGE_ALL 
+   elif [ "$a" =  "10G" ]; then
+    purge_oldway 
+   else
+    PURGE_ALL 
+	purge_oldway 
+   fi #4
+   CURRENT_USAGE="`df /u01| grep -oE '*[0-9]+%'| cut -d"%" -f1`"
+   if [ "$CURRENT_USAGE" -ge "$THRESHOLD" ]; then #6
+    echo "FS still above $THRESHOLD% threshold"
+    exit 1
+   else
+    echo "FS is now OK."
+    exit 0
+   fi  #6
+  #If space above threshold. do nothing.
+  else
+    echo "$CURRENT_USAGE% used, No action required."
+   echo "FS is ok doing Nothing"
+   exit 0
+  fi #3
+ else 
+  echo "No database in oratab. Aborting"
+  exit 0
+ fi #2
+else
+ echo "No oratab. probably no database here."
+ exit 0
+fi #1
+
+
+
+#12/8/2014 -- Fixed Threshold variable. -Rommell Sabino
+#12/11/2014 -- Found a bug on the extraction of the usage of /u01 on some servers that is not using logical volume.
+# -- Added a full path for ADRCI. Some servers are getting problem -- Rommell
+#12/12/2014 -- Used GRID_HOME for adrci binary and added a condition to purge current adrci homepaths only.
+# -- Added condition to check if there are database in the server by using oratab and added ORACLE_BASE environment
+#12/14/2014 -- Changed the Exit code of no database or no oratab as successfull - Rommell
+#12/15/2014 -- Added capability to purge scan listenes. The old version does not purge scan listener. 
+#02/23/2015 -- Tweaked the freeing up of space in 10G databases by forcing gzip every 100 files tarred. 
+#03/09/2015 -- There are 11G databases that are not using the default directory naming(just like 10G) -- addressed this issue.
+#06/04/2015 -- Added the cleanup of audit logfile as per Ravi's recommendation. Changed the query in 97 from select value from v\$parameter where name like '%dump_dest' to select value from v\$parameter where name like '%dump_dest' or name='audit_file_dest' 
+#07/08/2015 -- Added the procedure  option to remove the old backup files(The tar'd and gzipped filed from previous run". Current retention is RETENTION x 10
+#07/16/2015 -- Found out that ADRCi do not housekeep listener.log and server already has GB sized listener.log. Added the function to housekeep listener.log when it reached 10MB.
+#07/20/2015 -- There was a bug that filled up /u01 if a file to be cleaned is larget than free space. Temporary fix is to rollback the space used by script for cleaning. 
+#07/28/2015 -- There was an extra string that is not needed in the COMPRESS_LOG function. Removed it, it is now exiting fine. 
+#08/05/2015 -- Added an additional function to clean-up listener_scan. Using the +ASM home.
+#08/17/2015 -- Optimized code and clean redundant codes in clean up.
+#04/02/2016 -- Fixed the tar naming creation error and the tar cleanup.
+#10/01/2017 -- ADRCI clean up does not work on 11G and 12C with no ASM. Addressed by if there are no ASM and 11G+, will use DB home for the ADRCI binary.
+#10/17/2017	-- Version Check for 12C added.
