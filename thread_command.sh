@@ -1,6 +1,6 @@
 #!/bin/bash
 
-thread_num=2
+thread_num=3
 counter=0
 pids=""
 
@@ -10,7 +10,7 @@ output_num=`echo ${RANDOM:0:1}`
 echo $output_num
 }
 
-for i in 1 2 3 4 5 
+for i in 1 2 3 4 5 6 7 8 9 
 do
  echo "$i - location in the loop"
  if [ "$counter" -eq "$thread_num" ]; then
@@ -22,7 +22,7 @@ do
   pids="$pids $curr_pid"
   echo "Captured pid $pids"
   counter=`echo "$counter + 1"|bc`
-  while [ "$counter" -eq "$thread_num" ]
+  while [ "$counter" -eq "$thread_num" ] 
   do
    echo "$counter - num of thread right now"
    echo "Should pause here since thread running is equal to the thread_num var"
