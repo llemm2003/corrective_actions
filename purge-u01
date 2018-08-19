@@ -11,10 +11,30 @@
 
 #RETENTION is 60 days. The script can accept Integer argument and will be converted to Minutes.
 RETENTION=60
-THRESHOLD=85
+THRESHOLD=30
 FS="/u01"
 CURRENT_USAGE="`df /u01| grep -oE '*[0-9]+%'| cut -d"%" -f1`"
 RAC_NUM=$(grep ASM  /etc/oratab| grep -v '^\#' | awk -F":" '{print $1}' |  awk -F"ASM" '{print $2}')
+#Variable for number of file per tar. This is for performance and to avoid filesystem getting full while working. 
+FILESPERTARSET=100 
+
+#List of additional directories to be added for purging#08-19-2018
+DIR_STRINGS () {
+echo "/u01/app/oracle/crsdata/@global/cvu/baseline/cvures
+/u01/app/oracle/diag/crs/`hostname`/crs/trace
+/u01/app/oracle/crsdata/`hostname`/cvu/cvulog
+/u01/app/oracle/crsdata/`hostname`/cvu/cvutrc
+/u01/app/oracle/crsdata/`hostname`/evm
+$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan1/trace
+$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan1/alert
+$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan2/trace
+$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan2/alert
+$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan3/trace
+$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan3/alert
+$ORACLE_HOME/grid/log/`hostname`/gipcd
+$ORACLE_HOME/grid/log/`hostname`/cssd
+"
+}
 
 check_version () {
 if [ `grep -vE '^\#|^\*|^$|ASM|dg' /etc/oratab |head -1| awk -F":" '{print $2}'| grep "11"| wc -l` -eq "1" ]; then
@@ -34,7 +54,8 @@ OR_HOME=$(echo "$OR_LINE" |awk '{print $2}')
 ASM=$(grep -vE '^\#|^\*|^$|dg' /etc/oratab | grep ASM | awk -F":" '{print $1 " " $2}')
 ASM_SID=$(echo $ASM |awk '{print $1}')
 ASM_HOME=$(echo $ASM |awk '{print $2}')
-echo $OR_SID " " $OR_HOME " " $ASM_SID " " $ASM_HOME
+echo $OR_SID " " $OR_HOME " " 
+echo $ASM_SID " " $ASM_HOME " " 
 }
 
 GET_SIZE () {
@@ -74,31 +95,27 @@ gzip < "$1$faylnaym" > "$1$faylnaym.gz" &
 cat $1 >> "$1$faylnaym" && > $1
 }
 
-#Check files if there are files more than retention days. backup to zip then remove.
+#Check files if there are files more than retention days. backup to zip then remove. This is called inside CLEAN_FILES(for checking of existing directory)
 CHECK_FILES () {
 cd $1
-echo "looking for backup files that can be removed -- Threshold for backup files is RETENTION x 10"
-find . -type f -name 'backupfile*tar*' -mtime +$RETENTION -exec rm -rf {} \; || echo "Backup files removed" && echo "No backup files removed"
-if [ `find . -type f -mtime +$RETENTION ! -name '*gz' |wc -l` -gt "0" ]; then
+scratch=/tmp/file_u01.tmp
+RETENTION_LOCAL=$RETENTION
+echo "looking for backup files that can be removed -- Threshold for backup files is $RETENTION_LOCAL"
+find . -type f -name '*backupfile*gz*' -mtime +$RETENTION_LOCAL -exec rm -rf {} \; || echo "Backup files removed" && echo "No backup files removed" 
+if [ `find . -type f -mtime +$RETENTION_LOCAL ! -name '*gz' |wc -l` -gt "0" ]; then
  echo "There are files more than the retention in $1"
  counter=0
- faylnaym="backupfile-`date "+%m_%d_%y_%HH_%M_%S_%N"`.tar"
- for files in `find . -type f -mtime +$RETENTION ! -name '*gz'`
+ find . -type f -mtime +$RETENTION_LOCAL ! -name '*gz' > "$scratch" #Put the file then work on the file list. Much faster than work on the file itself.
+ file_list_count=`cat /tmp/file_u01.tmp | wc -l`
+ for ((x=1;x<$file_list_count;x=x+"$FILESPERTARSET"))
  do
-  if [ "$counter" -lt "100" ]; then
-   echo "Adding $files to $faylnaym"
-   tar rvf $faylnaym $files && rm -rf $files || rm -rf $faylnaym
-   counter=`expr $counter + 1`
-  else
-   gzip $faylnaym
-   faylnaym="backupfile-`date "+%m_%d_%y_%HH_%M_%S_%N"`.tar"
-   counter=0
-  fi
+  faylnaym="backupfile-`date "+%m_%d_%y_%HH_%M_%S_%N"`.tar"
+  tar rvf $faylnaym `sed -n "$(($x+1)), $(($x + $FILESPERTARSET )) p" "$scratch"` && sed -n "$(($x+1)), $(($x + $FILESPERTARSET )) p" "$scratch"| xargs rm -rf
+  nohup gzip $faylnaym &
+  ((counter++))
  done
- gzip $faylnaym
-else
- echo "No files to be cleaned in $1"
 fi
+rm -rf $scratch
 }
 
 purge_oldway () {
@@ -121,6 +138,8 @@ echo "Completed at `date`"
 }
 
 ADRCI_CLEAN () {
+ RETENTION_LOCAL=`echo "$RETENTION * 1440"|bc`
+ echo $RETENTION_LOCAL
  ADRCI="$ORACLE_HOME/bin/adrci"
  ADRCI_OUT=`$ADRCI exec="show homes"| grep -vE 'ADR|Homes:'`
  echo "Available Oracle Homes in adrci:" 
@@ -133,31 +152,53 @@ ADRCI_CLEAN () {
  LSN_LOG=$($ORACLE_HOME/bin/adrci exec=" show tracefiles listener%log" )
  for i in `echo "$LSN_LOG"`
 	  do
+	   echo $i '***********'
 	   listener_log=$(echo "$ORACLE_BASE/`echo $i| tr -d ' '`")
 	   FILESIZE=$(GET_SIZE "$listener_log")
        [ "$FILESIZE" -gt "10000000" ] && echo " $listener_log Is above threshold MB" || echo "$listener_log is Below threshold"
 	   [ "$FILESIZE" -gt "10000000" ] && COMPRESS_LOG "$listener_log"
+	   CLEAN_FILES $(dirname "$listener_log")
 	 done
+ if [ "$1" = "11G" ]; then
+  #11G compatibility only. 
+  for ((j=1;j<4;j++))
+  do
+    ORA11G_Listener="$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan$j/trace/listener_scan$j.log"
+    FILESIZE=$(GET_SIZE "$ORA11G_Listener")
+	[ "$FILESIZE" -gt "10000000" ] && echo "$ORA11G_Listener Is above 10MB threshold" || echo "$ORA11G_Listener is Below threshold"
+	[ "$FILESIZE" -gt "10000000" ] && COMPRESS_LOG "$ORA11G_Listener"
+  done
+ fi
 }
 
 PURGE_ALL () {
 ORAENV_ASK=NO
 ENVIRONMENT=$(get_environment| grep ASM)
+get_environment| grep ASM
 if [ -z "$ENVIRONMENT"  ]; then
- OR_LINE=$(grep -vE '^\#|^\*|^$|ASM|dg' /etc/oratab | awk -F":" '{print $1 " " $2}')
+ OR_LINE=$(grep -vE '^\#|^\*|^$|dg|ORCL' /etc/oratab | awk -F":" '{print $1 " " $2}')
  echo "$OR_LINE"| while read line
  do
-  ADRCI_CLEAN 
+  ADRCI_CLEAN $1
  done
 else
  export ORACLE_SID=$(echo "$ENVIRONMENT"| awk '{print $1}')
  . oraenv
- ADRCI_CLEAN
+ ADRCI_CLEAN $1
 fi
+echo $ORACLE_SID
+#Cleanup the additional logging directories rac. 
+echo "Purging additional directories......."
+for dir_log in $(DIR_STRINGS)
+do
+ echo "purging directory: $dir_log"
+ CLEAN_FILES $dir_log
+done
 }
 
 #MAIN
 #Retention Default is 60. Change it by using it as an argument in the script.
+
 [ ! -z "$1" ] && RETENTION="$1"
 CURRENT_USAGE="`df /u01| grep -oE '*[0-9]+%'| cut -d"%" -f1`"
 if [ -f "/etc/oratab" ]; then #Check if this is database server by checking oratab. If there is no oratab, abort #1
@@ -165,16 +206,16 @@ if [ -f "/etc/oratab" ]; then #Check if this is database server by checking orat
   if [ "$CURRENT_USAGE" -ge "$THRESHOLD" ]; then #3
    echo "$CURRENT_USAGE% used, running purge"
    a=$(check_version)
-   echo "This version $a"
+   echo "This is version $a"
    #Checking what version
    #If 11Gi
    if [ "$a" =  "11G" ]; then #4
    purge_oldway  
-   PURGE_ALL 
+   PURGE_ALL "$a"
    elif [ "$a" =  "10G" ]; then
     purge_oldway 
    else
-    PURGE_ALL 
+    PURGE_ALL "$a"
 	purge_oldway 
    fi #4
    CURRENT_USAGE="`df /u01| grep -oE '*[0-9]+%'| cut -d"%" -f1`"
@@ -221,3 +262,7 @@ fi #1
 #04/02/2016 -- Fixed the tar naming creation error and the tar cleanup.
 #10/01/2017 -- ADRCI clean up does not work on 11G and 12C with no ASM. Addressed by if there are no ASM and 11G+, will use DB home for the ADRCI binary.
 #10/17/2017	-- Version Check for 12C added.
+#08/19/2018 -- Added * on line CHECK_FILES function and replace tar with gz old value: "find . -type f -name '*backupfile*tar*' -mtime +$RETENTION -exec rm -rf {} \;" 
+#Added CLEAN_FILES on adrci to clean up the backup of listener log that are more than threshold. 
+#Added listener.log cleanup(11G). 
+#
