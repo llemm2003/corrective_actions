@@ -8,10 +8,18 @@
 #<threshold> is optional, default is 60. Add a number if you want to override the default.
 #Wait for it to complete
 
+##################################################################################################################
+#Variable for audit files clean up(inode fix/clean up)
+#This is a separate code before but since I found a fast way of cleaning up inode I am adding this. 
+JOB_HIST=/home/oracle/auditcleanup.log
+LOG1=/tmp/audit_removal_list_source.log
+num_deletion=3000 #Change this if you need more or less files to be deleted
+FIND=$(which find)
+##################################################################################################################
 
 #RETENTION is 60 days. The script can accept Integer argument and will be converted to Minutes.
-RETENTION=60
-THRESHOLD=30
+RETENTION=30
+THRESHOLD=85
 FS="/u01"
 CURRENT_USAGE="`df /u01| grep -oE '*[0-9]+%'| cut -d"%" -f1`"
 RAC_NUM=$(grep ASM  /etc/oratab| grep -v '^\#' | awk -F":" '{print $1}' |  awk -F"ASM" '{print $2}')
@@ -21,16 +29,16 @@ FILESPERTARSET=100
 #List of additional directories to be added for purging#08-19-2018
 DIR_STRINGS () {
 echo "/u01/app/oracle/crsdata/@global/cvu/baseline/cvures
-/u01/app/oracle/diag/crs/`hostname`/crs/trace
-/u01/app/oracle/crsdata/`hostname`/cvu/cvulog
-/u01/app/oracle/crsdata/`hostname`/cvu/cvutrc
-/u01/app/oracle/crsdata/`hostname`/evm
-$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan1/trace
-$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan1/alert
-$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan2/trace
-$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan2/alert
-$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan3/trace
-$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan3/alert
+/u01/app/oracle/diag/crs/`hostname -s`/crs/trace
+/u01/app/oracle/crsdata/`hostname -s`/cvu/cvulog
+/u01/app/oracle/crsdata/`hostname -s`/cvu/cvutrc
+/u01/app/oracle/crsdata/`hostname -s`/evm
+$ORACLE_HOME/log/diag/tnslsnr/`hostname -s`/listener_scan1/trace
+$ORACLE_HOME/log/diag/tnslsnr/`hostname -s`/listener_scan1/alert
+$ORACLE_HOME/log/diag/tnslsnr/`hostname -s`/listener_scan2/trace
+$ORACLE_HOME/log/diag/tnslsnr/`hostname -s`/listener_scan2/alert
+$ORACLE_HOME/log/diag/tnslsnr/`hostname -s`/listener_scan3/trace
+$ORACLE_HOME/log/diag/tnslsnr/`hostname -s`/listener_scan3/alert
 $ORACLE_HOME/grid/log/`hostname`/gipcd
 $ORACLE_HOME/grid/log/`hostname`/cssd
 "
@@ -163,7 +171,7 @@ ADRCI_CLEAN () {
   #11G compatibility only. 
   for ((j=1;j<4;j++))
   do
-    ORA11G_Listener="$ORACLE_HOME/log/diag/tnslsnr/`hostname`/listener_scan$j/trace/listener_scan$j.log"
+    ORA11G_Listener="$ORACLE_HOME/log/diag/tnslsnr/`hostname -s`/listener_scan$j/trace/listener_scan$j.log"
     FILESIZE=$(GET_SIZE "$ORA11G_Listener")
 	[ "$FILESIZE" -gt "10000000" ] && echo "$ORA11G_Listener Is above 10MB threshold" || echo "$ORA11G_Listener is Below threshold"
 	[ "$FILESIZE" -gt "10000000" ] && COMPRESS_LOG "$ORA11G_Listener"
@@ -195,6 +203,26 @@ do
  CLEAN_FILES $dir_log
 done
 }
+
+
+##################################################################################################################
+#Function for audit purge. 
+clean_up () {
+#This will be deleted
+echo "Job Starting at `date`" >> $JOB_HIST
+echo "List of files to be deleted on this run">> $JOB_HIST
+cd $1
+shopt -s globstar
+printf %s\\n ** >  $LOG1
+shopt -u globstar
+sed -n "1, $num_deletion p" $LOG1 >>  $JOB_HIST
+#$FIND $1 -name '*aud' -mtime +5 > $LOG1
+#head -$num_deletion $LOG1 >> $JOB_HIST
+#[ -s "$LOG1" ] && head -$num_deletion $LOG1 |xargs echo rm | sh || echo "No files found"
+[ -s "$LOG1" ] && sed -n "1, $num_deletion p" $LOG1  |xargs  rm || echo "No files found"
+echo "Job Ended at `date`" >> $JOB_HIST
+}
+##################################################################################################################
 
 #MAIN
 #Retention Default is 60. Change it by using it as an argument in the script.
@@ -241,7 +269,13 @@ else
  exit 0
 fi #1
 
-
+##################################################################################################################
+#Main for audit purge
+for i in `get_environment`
+do
+[ -d "$i/rdbms/audit" ] && clean_up "$i/rdbms/audit"
+done
+##################################################################################################################
 
 #12/8/2014 -- Fixed Threshold variable. -Rommell Sabino
 #12/11/2014 -- Found a bug on the extraction of the usage of /u01 on some servers that is not using logical volume.
