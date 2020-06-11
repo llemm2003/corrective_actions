@@ -1,0 +1,62 @@
+set serveroutput on
+DECLARE
+user_name CONSTANT varchar2(6) := 'DBSNMP';
+profile_name dba_profiles.profile%TYPE;
+profile_name_temp dba_profiles.profile%TYPE;
+accnt_status dba_users.account_status%TYPE;
+profile_name_check dba_profiles.profile%TYPE;
+profile_count number(2);
+hashed_pwd varchar2(20);
+cr_profile CONSTANT varchar2(95) := 'create profile C##TEMP_ONLY_PLEASE_DELETE limit PASSWORD_REUSE_MAX unlimited';
+pw_vrfy_fxn CONSTANT varchar2(95) := 'alter profile C##TEMP_ONLY_PLEASE_DELETE  limit PASSWORD_VERIFY_FUNCTION  null';
+pw_reuse_time CONSTANT varchar2(95) := 'alter profile C##TEMP_ONLY_PLEASE_DELETE  limit PASSWORD_REUSE_TIME unlimited';
+pw_lf_time CONSTANT varchar2(95) := 'alter profile C##TEMP_ONLY_PLEASE_DELETE  limit PASSWORD_LIFE_TIME unlimited';
+BEGIN
+/*Check temp profile if existing and if profile has users. If existing, drop it. If it has users, move to default.  */
+select count(*) into profile_count  from dba_profiles where profile='C##TEMP_ONLY_PLEASE_DELETE';
+ IF profile_count > 0 THEN
+  BEGIN
+   dbms_output.put_line('Dropping temp profile....');
+   execute immediate ('drop profile C##TEMP_ONLY_PLEASE_DELETE');
+  EXCEPTION 
+   WHEN OTHERS THEN dbms_output.put_line(sqlerrm);
+  END;
+ END IF;
+select count(*) into profile_count  from dba_profiles where profile='C##TEMP_ONLY_PLEASE_DELETE';
+
+/*Check status of dbsnmp account, if the temp profile is existing, drop then recreate*/
+select profile, account_status into profile_name, accnt_status from dba_users where username = user_name;
+dbms_output.put_line('DBSNMP: '||profile_name ||' '||accnt_status);
+ IF accnt_status = 'EXPIRED' THEN
+ BEGIN
+  select password into hashed_pwd from user$ where name = user_name;
+ EXCEPTION
+   WHEN NO_DATA_FOUND THEN 
+    hashed_pwd := 'EB8D5EE8696A6739';
+   WHEN OTHERS THEN  raise_application_error
+   (-20001, 'DBSBMP user problem');
+ END;
+  dbms_output.put_line('Creating temp_profile:');
+  BEGIN
+	execute immediate (cr_profile);
+	execute immediate (pw_vrfy_fxn);
+	execute immediate (pw_reuse_time);
+	execute immediate (pw_lf_time);
+  EXCEPTION
+   WHEN OTHERS THEN dbms_output.put_line(sqlerrm);
+  END;
+/* Process is to change the user profile to temp, change the password using the current one then change back the profile to the original profile*/
+  select distinct profile into profile_name_check  from dba_profiles where profile='C##TEMP_ONLY_PLEASE_DELETE';
+  execute immediate ('alter user '||user_name||' profile C##TEMP_ONLY_PLEASE_DELETE identified by values '''||hashed_pwd||'''');
+  dbms_output.put_line('Profile changed');
+  select profile, account_status into profile_name_temp, accnt_status from dba_users where username = user_name;
+  dbms_output.put_line('DBSNMP:'||profile_name_temp ||' '||accnt_status);
+  dbms_output.put_line('Reverting back the profile.');
+  execute immediate ('alter user '||user_name||' profile '|| profile_name);
+  select profile, account_status into profile_name, accnt_status from dba_users where username = user_name;
+  dbms_output.put_line(profile_name ||' '||accnt_status);
+  execute immediate ('drop profile C##TEMP_ONLY_PLEASE_DELETE');
+  select profile, account_status into profile_name, accnt_status from dba_users where username = user_name;
+  dbms_output.put_line(profile_name ||' '||accnt_status);
+ END IF;
+END;
