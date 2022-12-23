@@ -5,3 +5,5 @@ I am trying to write all corrective actions on a single script since I do not ha
 purge-u01 - Job to clean up clutters in u01. For 10G, cleans up the trace files and alerts logs. 11G+ Uses the 10G plus clean up using adrci. 
 
 thread_command - An atempt to use multiple threads on commands that will have to work on a lot objects for ex. cp * dir
+
+extend-password-expiration - To remove the password expiration users where common and non common profiles. 
