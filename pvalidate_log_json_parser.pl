@@ -215,6 +215,7 @@ print "$root_hash{block}{'Database Instance Status'} \n";
 	#push(@stg_info,$_) for @xx;
 	#$stg_regex='(Instance\s[\w]+\sup)\s.+\s';
 	
+	
 }
 		
 foreach (@db_instance_status) {
