@@ -22,15 +22,11 @@ Is\s'."$root_hash{$_}{name}".'\sa\scontainer\sDB\s+=\s([\w]+)
 PDBS
 PDBs\sfor\s' ."$root_hash{$_}{name}". '\s+=\s([\w,]+)
 Database Instance Status.
-(Instance\s[\w]+\sup)\s.+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)
 (Instance\s[\w]+\sup\s).+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)
 =cut REGEX
 
 =begin TODO
-Second layer done. 
-Find way to disable the warning on null hash. done
-Try to print the top_layer as JSON. 
-Set the parameters that can be null to null like FAL_SERVER and DATABASE ROLE.
+Instance pre-checks: inprogress. 
 =cut TODO
 use strict;
 use warnings;
@@ -39,7 +35,7 @@ my $input_log=$ARGV[0];
 
 #Global Variable for json.
 my %root_hash; #This hash will contain all the information captured from the logfile. 
-my (@db_name,@test_array,@db_instance_status);#test_array contains the log. 
+my (@db_name,@test_array,@db_instance_status,@instance_precheck);#test_array contains the log. 
 my @top_layer=qw/name Local_instance Database_role FAL_SERVER is_CDB PDBS/;
 my @second_layer=('Database Instance Status','Instance Pre-checks','Database Restore Points','Tablespace Checks','Database components','Database objects','PDB Validation',
 'Backup Validation','Database Parameter Checks','Some components have FAILED');#I need the space in the string
@@ -103,18 +99,79 @@ sub print_to_json {
 	}
 }
 
-############MAIN############
+sub open_object {
+	my $input_object=$_[0];
+	my $obj_direction=$_[1];
+	my $terminator; 
+	if ( $_[3] ) {
+	$terminator=$_[3];
+	}
+	my $stg_regex;
+	my $regex;
+	if ( $_[4] ) {
+		$stg_regex=$_[4];
+		$regex=qr/$stg_regex/;
+	}
+	my $stg_obj;
+	my @stg_array;
+	open (INPUT_LOG,$obj_direction,$input_object) or die "print $!"; #Put all the data in an array which is stg_array;
+	if ( $terminator ) {
+		local $/=$terminator;
+	}
+		foreach (<INPUT_LOG>) {
+			$stg_obj=$_;
+			$stg_obj=~s/\e\[[0-9;]*m(?:\e\[K)?//g; #Perl does not like seeing color information, so I have to remove it. 
+			if ( $_[4] ) {
+				if ($stg_obj=~/$regex/) {
+					push(@stg_array,$stg_obj);
+				}
+			}
+			push(@stg_array,$stg_obj);
+		}
+	close(INPUT_LOG);	
+	return @stg_array; #Return the array to be used for array variable
+}
 
-open (INPUT_LOG,'<',$input_log) or die "print $!"; #Put all the log inside the array test_array.
-	foreach (<INPUT_LOG>) {
-		my $x=$_;
-		$x=~s/\e\[[0-9;]*m(?:\e\[K)?//g; #Perl does not like seeing color information, so I have to remove it. 
-		push(@test_array,$x);
+sub open_block {#This has no return yet, It will put directly to the hash. I will fix this later.
+	my $input=$_[0];
+	my $regex=qr/$input/;
+	open (INPUT_LOG,'<',$input_log) or die "print $!"; 
+	local $/ = "\n\n";
+	while (<INPUT_LOG>) {
+		if ( $_ =~ /$regex/ ) {
+			$root_hash{block}{$input}=$_;
+		}
 	}
 close (INPUT_LOG);
+}
 
+sub hash_read {		
+	open (TEMP_LOG,'<',\$root_hash{block}{'Database Instance Status'}) or die "print $!"; #Put all the log inside the array test_array.
+	local $/="\n"; #just make sure that the operation is by line not by block. 
+	my @test;
+	while (<TEMP_LOG>) {
+		my $x=$_;
+		$x=~s/\e\[[0-9;]*m(?:\e\[K)?//g;
+		push(@test,$x);
+	}
+	close (TEMP_LOG);
+
+	my $signal='FALSE';
+	foreach (@test) {
+		if (/p00trj0_fra248/) { $signal='TRUE'; next;}
+		if ($signal eq 'TRUE' and ! /-/ and ! /$^/) {
+			if ( $_ =~ /(Instance\s[\w]+\sup\s).+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)/) {
+				push(@db_instance_status,$1);
+				$root_hash{'db[2]'}{'Database Instance Status'}{$1}=$2;
+			} 
+		}
+	}
+}
+############MAIN############
+
+@test_array=open_object("$input_log",'<');
 foreach (@test_array) {
-	if ( $_ =~ /^(db\[\d+\])\s=\s(\w+)$/ ) { # Top layer object:
+	if ( $_ =~ /^(db\[\d+\])\s=\s(\w+)$/ ) { # The DB num and name. This is important since I have seen logs where there are db[1] and db[2].
 			push(@db_name,$1);
 			$root_hash{$1}{name}=$2;
 	}
@@ -173,6 +230,7 @@ foreach my $i (0..$#test_array) {
 }
 
 #Try using block read. 
+
 {
 open (INPUT_LOG,'<',$input_log) or die "print $!"; #Put all the log inside the array test_array.
 	local $/ = "\n\n";
@@ -183,8 +241,6 @@ open (INPUT_LOG,'<',$input_log) or die "print $!"; #Put all the log inside the a
 	}
 close (INPUT_LOG);
 }
-
-print "$root_hash{block}{'Database Instance Status'} \n";
 
 {		
 	open (TEMP_LOG,'<',\$root_hash{block}{'Database Instance Status'}) or die "print $!"; #Put all the log inside the array test_array.
@@ -201,11 +257,10 @@ print "$root_hash{block}{'Database Instance Status'} \n";
 	foreach (@test) {
 		if (/p00trj0_fra248/) { $signal='TRUE'; next;}
 		if ($signal eq 'TRUE' and ! /-/ and ! /$^/) {
-			print "This is the content -- $_ \n";
 			if ( $_ =~ /(Instance\s[\w]+\sup\s).+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)/) {
 				push(@db_instance_status,$1);
 				$root_hash{'db[2]'}{'Database Instance Status'}{$1}=$2;
-			} else {print "NONE FOUND \n";}
+			} 
 		}
 	}
 	#my $stg_regex='(Instance\s[\w]+\sup)\s.+\s';
@@ -215,38 +270,51 @@ print "$root_hash{block}{'Database Instance Status'} \n";
 	#push(@stg_info,$_) for @xx;
 	#$stg_regex='(Instance\s[\w]+\sup)\s.+\s';
 	
-	
 }
 		
 foreach (@db_instance_status) {
 	print "\"$_\":\"$root_hash{'db[2]'}{'Database Instance Status'}{$_}\"\n";
 }
-		
-#Try to print via JSON. 
 
-foreach (@db_name) {
-	next if ( $root_hash{$_}{Local_instance} eq 'NULL' );
-	print_to_json("1" , "$root_hash{$_}{name}");
-	for my $i (0..$#top_layer) {
-		print_to_json("2","$top_layer[$i]","$root_hash{$_}{$top_layer[$i]}");
+print "PRECHECK \n";
+
+{#The instance pre-check output is not in the correct place if there are multiple DB. So this have to be manual.
+	my $input=$_[0];
+	open (INPUT_LOG,'<',$input_log) or die "print $!"; 
+	local $/ = "\n\n";
+	while (<INPUT_LOG>) {
+		if ( /p00trj0_fra248/ and /Spfile in use/  ) {
+			$root_hash{block}{'Instance Pre-checks'}=$_;
+		}
 	}
+close (INPUT_LOG);
+}
+#print "$root_hash{block}{'Instance Pre-checks'}";
+
+{		
+	open (TEMP_LOG,'<',\$root_hash{block}{'Instance Pre-checks'}) or die "print $!"; #Put all the log inside the array test_array.
+	local $/="\n"; #just make sure that the operation is by line not by block. 
+	my @test;
+	while (<TEMP_LOG>) {
+		my $x=$_;
+		$x=~s/\e\[[0-9;]*m(?:\e\[K)?//g;
+		push(@test,$x);
+	}
+	close (TEMP_LOG);
+
+	my $signal='FALSE';
+	foreach (@test) {
+		if (/p00trj0_fra248/) { $signal='TRUE'; next;}
+		if ($signal eq 'TRUE' and ! /-/ and ! /$^/) {
+			if ( $_ =~ /(Spfile\sin\suse|AMM\ssize|SGA\ssize)\s\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)/) {
+				push(@instance_precheck,$1);
+				$root_hash{'db[2]'}{'Instance Pre-checks'}{$1}=$2;
+			} 
+		}
+	}
+	
 }
 
-
-=begin
-
-$root_hash{dbnum}
-$root_hash{dbnum}{name}
-$root_hash{dbnum}{Local_instance}
-$root_hash{dbnum}{Database_role}
-$root_hash{dbnum}{FAL_SERVER}
-$root_hash{dbnum}{is_CDB}
-$root_hash{dbnum}{PDBS}
-$root_hash{dbnum}{'Database Instance Status'}:This will one or more 
-$root_hash{dbnum}{'Database Instance Status'}{Instace 1 is up}
-$root_hash{dbnum}{'Database Instance Status'}{Instace 2 is up}
-$root_hash{dbnum}{'Database Instance Status'}{Instace 2 is up}
-
-
-
-=cut 
+foreach (@instance_precheck) {
+	print "\"$_\":\"$root_hash{'db[2]'}{'Instance Pre-checks'}{$_}\"\n";
+}
