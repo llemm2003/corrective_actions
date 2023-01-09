@@ -23,6 +23,8 @@ PDBS
 PDBs\sfor\s' ."$root_hash{$_}{name}". '\s+=\s([\w,]+)
 Database Instance Status.
 (Instance\s[\w]+\sup\s).+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)
+Instance Pre-checks
+(Spfile\sin\suse|AMM\ssize|SGA\ssize)\s\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)
 =cut REGEX
 
 =begin TODO
@@ -37,8 +39,11 @@ my $input_log=$ARGV[0];
 my %root_hash; #This hash will contain all the information captured from the logfile. 
 my (@db_name,@test_array,@db_instance_status,@instance_precheck);#test_array contains the log. 
 my @top_layer=qw/name Local_instance Database_role FAL_SERVER is_CDB PDBS/;
-my @second_layer=('Database Instance Status','Instance Pre-checks','Database Restore Points','Tablespace Checks','Database components','Database objects','PDB Validation',
+my @second_layer=('Database Instance Status','Instance Pre-checks');
+=begin
+,'Database Restore Points','Tablespace Checks','Database components','Database objects','PDB Validation',
 'Backup Validation','Database Parameter Checks','Some components have FAILED');#I need the space in the string
+=cut
 my @third_layer=('Cluster Status','Correct patches applied to DB Home (local node)','Upgrade Pre-Checks','Space Checks (OS)','Free Space in ASM','OPC User Setup','Server Checks');
 my ($regex,$stg_regex); #regex and regex staging variable. 
 #Global variable for json print. 
@@ -87,15 +92,19 @@ sub print_to_json {
 	if ($begin_j eq 'FALSE') {#begin will be true only on the first execute. This signal to start the json start string which is the curly brackets.
 		$begin_j='TRUE';
 		print "\{\n\t";
-		print "\"$input_keys[1]\":\{\n";
+		print "\"$input_keys[2]\":\{\n";
 	} else {
 		for my $i (1..$input_num) {
 			print "\t";
 		}
-		print "\"$input_keys[1]\":\"$input_keys[2]\"";
-		if ( $input_keys[$#input_keys] eq 'END_LINE' or $input_keys[$#input_keys] eq 'START_NEW'){
-			print "\},\n";
-		} else { print ",\n"; }
+		if ( $input_keys[1] eq 'START_NEW'){
+			print "\"$input_keys[2]\":\{\n";
+			#print "\},\n";
+		} elsif ($input_keys[1] eq 'LINE') {
+			print "\"$input_keys[2]\":\"$input_keys[3]\",\n";
+		} elsif ($input_keys[1] eq 'END_LINE') {
+			print "\"$input_keys[2]\":\"$input_keys[3]\"\},\n";
+		}
 	}
 }
 
@@ -132,41 +141,6 @@ sub open_object {
 	return @stg_array; #Return the array to be used for array variable
 }
 
-sub open_block {#This has no return yet, It will put directly to the hash. I will fix this later.
-	my $input=$_[0];
-	my $regex=qr/$input/;
-	open (INPUT_LOG,'<',$input_log) or die "print $!"; 
-	local $/ = "\n\n";
-	while (<INPUT_LOG>) {
-		if ( $_ =~ /$regex/ ) {
-			$root_hash{block}{$input}=$_;
-		}
-	}
-close (INPUT_LOG);
-}
-
-sub hash_read {		
-	open (TEMP_LOG,'<',\$root_hash{block}{'Database Instance Status'}) or die "print $!"; #Put all the log inside the array test_array.
-	local $/="\n"; #just make sure that the operation is by line not by block. 
-	my @test;
-	while (<TEMP_LOG>) {
-		my $x=$_;
-		$x=~s/\e\[[0-9;]*m(?:\e\[K)?//g;
-		push(@test,$x);
-	}
-	close (TEMP_LOG);
-
-	my $signal='FALSE';
-	foreach (@test) {
-		if (/p00trj0_fra248/) { $signal='TRUE'; next;}
-		if ($signal eq 'TRUE' and ! /-/ and ! /$^/) {
-			if ( $_ =~ /(Instance\s[\w]+\sup\s).+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)/) {
-				push(@db_instance_status,$1);
-				$root_hash{'db[2]'}{'Database Instance Status'}{$1}=$2;
-			} 
-		}
-	}
-}
 ############MAIN############
 
 @test_array=open_object("$input_log",'<');
@@ -204,19 +178,9 @@ foreach (@db_name) {
 		print "$_:$top_layer[$i] : $root_hash{$_}{$top_layer[$i]} \n";
 	}
 }
-
-foreach (@db_name) {
-	next if ( $root_hash{$_}{Local_instance} eq 'NULL' );
-	print_to_json("1" , "$root_hash{$_}{name}");
-	for my $i (0..$#top_layer) {
-		print_to_json("2","$top_layer[$i]","$root_hash{$_}{$top_layer[$i]}");
-	}
-}
-
-print "Working here \n";
+=begin
 $stg_regex='Database\sInstance\sStatus';
 $regex=qr/$stg_regex/;
-
 foreach my $i (0..$#test_array) {
 	if ( $test_array[$i]=~ /$regex/ ) {
 		print "$i - index of the regex \n";
@@ -228,12 +192,11 @@ foreach my $i (0..$#test_array) {
 		}
 	}
 }
-
-#Try using block read. 
-
+=cut
+#Try using block read.
 {
 open (INPUT_LOG,'<',$input_log) or die "print $!"; #Put all the log inside the array test_array.
-	local $/ = "\n\n";
+	local $/ = "\n\n";#REGEX per line will not work on some logs due to wrong location. Restore point and Instance pre-check is not on its own block--they are on the same block, if there are multiple DB.  
 	while (<INPUT_LOG>) {
 		if ( $_ =~ /Database Instance Status/ ) {
 			$root_hash{block}{'Database Instance Status'}=$_;
@@ -263,20 +226,12 @@ close (INPUT_LOG);
 			} 
 		}
 	}
-	#my $stg_regex='(Instance\s[\w]+\sup)\s.+\s';
-	#my @xx=search_info2(\@test,"$stg_regex");
-	#print "input regex: $stg_regex \n";
-	#print "$_ \n" for @xx;
-	#push(@stg_info,$_) for @xx;
-	#$stg_regex='(Instance\s[\w]+\sup)\s.+\s';
-	
 }
 		
 foreach (@db_instance_status) {
 	print "\"$_\":\"$root_hash{'db[2]'}{'Database Instance Status'}{$_}\"\n";
 }
 
-print "PRECHECK \n";
 
 {#The instance pre-check output is not in the correct place if there are multiple DB. So this have to be manual.
 	my $input=$_[0];
@@ -289,7 +244,6 @@ print "PRECHECK \n";
 	}
 close (INPUT_LOG);
 }
-#print "$root_hash{block}{'Instance Pre-checks'}";
 
 {		
 	open (TEMP_LOG,'<',\$root_hash{block}{'Instance Pre-checks'}) or die "print $!"; #Put all the log inside the array test_array.
@@ -317,4 +271,26 @@ close (INPUT_LOG);
 
 foreach (@instance_precheck) {
 	print "\"$_\":\"$root_hash{'db[2]'}{'Instance Pre-checks'}{$_}\"\n";
+}
+
+foreach (@db_name) {
+	next if ( $root_hash{$_}{Local_instance} eq 'NULL' );
+	print_to_json("1" , 'LINE', "$root_hash{$_}{name}");
+	for my $i (0..$#top_layer) {
+		print_to_json("2",'LINE',"$top_layer[$i]","$root_hash{$_}{$top_layer[$i]}");
+	}
+	foreach my $j (@second_layer) {
+		my @temp_arr;
+		my $temp_key;
+		print_to_json("2",'START_NEW',"$j");
+		foreach $temp_key (keys $root_hash{$_}{$j}) {
+			push(@temp_arr,$temp_key);
+		}
+		for my $i (0..$#temp_arr) {
+			if ($i == $#temp_arr) {
+				print_to_json("3",'END_LINE',"$temp_arr[$i]","$root_hash{$_}{$j}{$temp_arr[$i]}");
+			} else {print_to_json("3",'LINE',"$temp_arr[$i]","$root_hash{$_}{$j}{$temp_arr[$i]}");}
+			
+		}
+	}
 }
