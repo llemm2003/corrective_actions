@@ -23,6 +23,7 @@ PDBS
 PDBs\sfor\s' ."$root_hash{$_}{name}". '\s+=\s([\w,]+)
 Database Instance Status.
 (Instance\s[\w]+\sup)\s.+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)
+(Instance\s[\w]+\sup\s).+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)
 =cut REGEX
 
 =begin TODO
@@ -38,7 +39,7 @@ my $input_log=$ARGV[0];
 
 #Global Variable for json.
 my %root_hash; #This hash will contain all the information captured from the logfile. 
-my (@db_name,@test_array);#test_array contains the log. 
+my (@db_name,@test_array,@db_instance_status);#test_array contains the log. 
 my @top_layer=qw/name Local_instance Database_role FAL_SERVER is_CDB PDBS/;
 my @second_layer=('Database Instance Status','Instance Pre-checks','Database Restore Points','Tablespace Checks','Database components','Database objects','PDB Validation',
 'Backup Validation','Database Parameter Checks','Some components have FAILED');#I need the space in the string
@@ -189,36 +190,46 @@ print "$root_hash{block}{'Database Instance Status'} \n";
 	open (TEMP_LOG,'<',\$root_hash{block}{'Database Instance Status'}) or die "print $!"; #Put all the log inside the array test_array.
 	local $/="\n"; #just make sure that the operation is by line not by block. 
 	my @test;
-	my $signal='NO';
 	while (<TEMP_LOG>) {
 		my $x=$_;
 		$x=~s/\e\[[0-9;]*m(?:\e\[K)?//g;
-		if ($ x =~ /p00trj0_fra248/) { 
-			$signal = 'YES';
-		} else {
-			$signal = 'NO';
-		}
-		if ( $signal eq 'YES' ) { 
-			print "$x \n"; 
-		}
+		push(@test,$x);
 	}
 	close (TEMP_LOG);
-	print "$#test - count of array \n";
-	print "Caught this - $_ \n" for @test;
+
+	my $signal='FALSE';
 	foreach (@test) {
-		print "$_ \n" if (/[.]+/);
+		if (/p00trj0_fra248/) { $signal='TRUE'; next;}
+		if ($signal eq 'TRUE' and ! /-/ and ! /$^/) {
+			print "This is the content -- $_ \n";
+			if ( $_ =~ /(Instance\s[\w]+\sup\s).+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)/) {
+				push(@db_instance_status,$1);
+				$root_hash{'db[2]'}{'Database Instance Status'}{$1}=$2;
+			} else {print "NONE FOUND \n";}
+		}
 	}
-	my $stg_regex='(Instance\s[\w]+\sup)\s.+\s';
-	my @xx=search_info2(\@test,"$stg_regex");
-	print "input regex: $stg_regex \n";
-	print "$_ \n" for @xx;
+	#my $stg_regex='(Instance\s[\w]+\sup)\s.+\s';
+	#my @xx=search_info2(\@test,"$stg_regex");
+	#print "input regex: $stg_regex \n";
+	#print "$_ \n" for @xx;
 	#push(@stg_info,$_) for @xx;
-	$stg_regex='(Instance\s[\w]+\sup)\s.+\s';
+	#$stg_regex='(Instance\s[\w]+\sup)\s.+\s';
 	
 }
 		
+foreach (@db_instance_status) {
+	print "\"$_\":\"$root_hash{'db[2]'}{'Database Instance Status'}{$_}\"\n";
+}
 		
 #Try to print via JSON. 
+
+foreach (@db_name) {
+	next if ( $root_hash{$_}{Local_instance} eq 'NULL' );
+	print_to_json("1" , "$root_hash{$_}{name}");
+	for my $i (0..$#top_layer) {
+		print_to_json("2","$top_layer[$i]","$root_hash{$_}{$top_layer[$i]}");
+	}
+}
 
 
 =begin
