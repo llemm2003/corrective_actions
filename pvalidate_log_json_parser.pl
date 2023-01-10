@@ -39,10 +39,10 @@ my $input_log=$ARGV[0];
 my %root_hash; #This hash will contain all the information captured from the logfile. 
 my (@db_name,@test_array,@db_instance_status,@instance_precheck);#test_array contains the log. 
 my @top_layer=qw/name Local_instance Database_role FAL_SERVER is_CDB PDBS/;
-my @second_layer=('Database Instance Status','Instance Pre-checks');
+my @second_layer=('Database Instance Status','Instance Pre-checks','Database Restore Points','Tablespace Checks','Database components','PDB Validation','Backup Validation','Database Parameter Checks','Server Checks','Cluster Status','Correct patches applied to DB Home (local node)',);
 =begin
-,'Database Restore Points','Tablespace Checks','Database components','Database objects','PDB Validation',
-'Backup Validation','Database Parameter Checks','Some components have FAILED');#I need the space in the string
+,,'Database objects'
+,'Some components have FAILED');#I need the space in the string
 =cut
 my @third_layer=('Cluster Status','Correct patches applied to DB Home (local node)','Upgrade Pre-Checks','Space Checks (OS)','Free Space in ASM','OPC User Setup','Server Checks');
 my ($regex,$stg_regex); #regex and regex staging variable. 
@@ -141,6 +141,15 @@ sub open_object {
 	return @stg_array; #Return the array to be used for array variable
 }
 
+sub check_if_exists {
+	my $input1=$_[0];
+	my @stg_array=@{$_[1]};
+	my $output=undef;
+	foreach (@stg_array) {
+		if ($_ eq $input1) {$output='TRUE';}
+	} 
+	return $output;
+}
 ############MAIN############
 
 @test_array=open_object("$input_log",'<');
@@ -194,6 +203,119 @@ foreach my $i (0..$#test_array) {
 }
 =cut
 #Try using block read.
+#REGEX declaration and quotation. 
+$stg_regex='Database Instance Status';
+$root_hash{regex}{'Database Instance Status'}{main}=qr/$stg_regex/;
+$stg_regex='(Instance\s[\w]+\sup\s).+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)';
+$root_hash{regex}{'Database Instance Status'}{second}=qr/$stg_regex/;
+
+$stg_regex='Instance Pre-checks';
+$root_hash{regex}{'Instance Pre-checks'}{main}=qr/$stg_regex/;
+$stg_regex='(Spfile\sin\suse|AMM\ssize|SGA\ssize)\s\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)';
+$root_hash{regex}{'Instance Pre-checks'}{second}=qr/$stg_regex/;
+
+$stg_regex='Database Restore Points';
+$root_hash{regex}{'Database Restore Points'}{main}=qr/$stg_regex/;
+$stg_regex='(Restore\sPoint\(s\)).+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)';
+$root_hash{regex}{'Database Restore Points'}{second}=qr/$stg_regex/;
+
+$stg_regex='Tablespace Checks';
+$root_hash{regex}{'Tablespace Checks'}{main}=qr/$stg_regex/;
+$stg_regex='^\s+((?:[A-Z][\w\s]+))\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)';
+$root_hash{regex}{'Tablespace Checks'}{second}=qr/$stg_regex/;
+
+$stg_regex='Database components';
+$root_hash{regex}{'Database components'}{main}=qr/$stg_regex/;
+$stg_regex='^\s+(Database\scomponents\svalid)\s\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)';
+$root_hash{regex}{'Database components'}{second}=qr/$stg_regex/;
+
+$stg_regex='Database objects';
+$root_hash{regex}{'Database objects'}{main}=qr/$stg_regex/;
+$stg_regex='^\s+(Internal\sOracle\sdatabase\sobjects\svalid|Application\sschema\sobjects\svalid)\s\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING[\w\s\-.]+|INTERMEDIATE[\w\s\-.]+)';
+$root_hash{regex}{'Database objects'}{second}=qr/$stg_regex/;
+
+$stg_regex='PDB Validation';
+$root_hash{regex}{'PDB Validation'}{main}=qr/$stg_regex/;
+$stg_regex='^\s+((?:PDBs\sin|PDB\sPlug-In)[\s\w()]+)\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING[\w\s\-.]+|INTERMEDIATE[\w\s\-.]+)';
+$root_hash{regex}{'PDB Validation'}{second}=qr/$stg_regex/;
+
+$stg_regex='Backup Validation';
+$root_hash{regex}{'Backup Validation'}{main}=qr/$stg_regex/;
+$stg_regex='^\s+(RMAN\sBackups)\s\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING[\w\s\-.]+|INFORMATIONAL[\w\s\-.]+)';
+$root_hash{regex}{'Backup Validation'}{second}=qr/$stg_regex/;
+
+$stg_regex='Database Parameter Checks';
+$root_hash{regex}{'Database Parameter Checks'}{main}=qr/$stg_regex/;
+$stg_regex='^\s+([\w]+\sin\sCDB)\s\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING[\w\s\-.]+|INFORMATIONAL[\w\s\-.]+)';
+$root_hash{regex}{'Database Parameter Checks'}{second}=qr/$stg_regex/;
+
+$stg_regex='Server Checks';
+$root_hash{regex}{'Server Checks'}{main}=qr/$stg_regex/;
+$stg_regex='^\s+((?:RAM|Hugepages|Memlock|Server\s(?:up)|NTPD\/CTSS|Screen|Swap)[\s()\w-]+)\s\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.]+)';
+$root_hash{regex}{'Server Checks'}{second}=qr/$stg_regex/;
+
+$stg_regex='Cluster Status';
+$root_hash{regex}{'Cluster Status'}{main}=qr/$stg_regex/;
+$stg_regex='^\s+([\s()\w-]+)\s\.+\s(PASSED|FAILED[\w\s\-.:\/,()]+|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.:\/,()]+)';
+$root_hash{regex}{'Cluster Status'}{second}=qr/$stg_regex/;
+
+$stg_regex='Correct patches applied to DB Home (local node)';
+$root_hash{regex}{'Correct patches applied to DB Home (local node)'}{main}=qr/$stg_regex/;
+$stg_regex='^\s+(Patch\s[\d]+)\s\.+\s(PASSED|FAILED[\w\s\-.:\/,()]+|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.:\/,()]+)';
+$root_hash{regex}{'Correct patches applied to DB Home (local node)'}{second}=qr/$stg_regex/;
+
+foreach my $dbname (@db_name) {
+	print "$dbname - working here \n";
+	next if (  $root_hash{$dbname}{Local_instance} eq 'NULL' );
+	print "$root_hash{$dbname}{name} ----HERE \n";
+	my $stg_regex=$root_hash{$dbname}{name};
+	my $regex=qr/$stg_regex/;
+	my @temp_array;
+	foreach my $sl (@second_layer) {
+		{
+			print "$root_hash{regex}{$sl}{main} ---MAIN REGEX\n ";
+			open (INPUT_LOG,'<',$input_log) or die "print $!"; #Put all the log inside the array test_array.
+				local $/ = "\n\n";#REGEX per line will not work on some logs due to wrong location. Restore point and Instance pre-check is not on its own block--they are on the same block, if there are multiple DB.  
+				while (<INPUT_LOG>) {
+					if ( $_ =~ /$root_hash{regex}{$sl}{main}/ ) {
+						$root_hash{block}{$sl}=$_;
+					} 
+				}
+			close (INPUT_LOG);
+		}
+		print "found block for $sl: \n $root_hash{block}{$sl} -- HERE\n";
+		
+		{
+			open (TEMP_LOG,'<',\$root_hash{block}{$sl}) or die "print $!"; #Put all the log inside the array test_array.
+			local $/="\n"; #just make sure that the operation is by line not by block. 
+			my @test;
+			while (<TEMP_LOG>) {
+				my $x=$_;
+				$x=~s/\e\[[0-9;]*m(?:\e\[K)?//g;
+				push(@test,$x);
+			}
+			close (TEMP_LOG);
+			#print "$regex - REGEX USED\n";
+			#print "$root_hash{regex}{$sl}{second} \n";
+			#print "$_" for @test;
+			my $signal='FALSE';
+			foreach my $test_var (@test) {
+				if ( $test_var=~/$regex/ ) { $signal='TRUE';next;}
+				if (check_if_exists("$sl",\@third_layer)) { $signal='TRUE';}
+				if ( $signal eq 'TRUE' ) {
+					if ( $test_var =~ /$root_hash{regex}{$sl}{second}/ ) {
+						push(@temp_array,$1);
+						my $temp_var=$2;chomp($temp_var);
+						$root_hash{$dbname}{$sl}{$1}=$temp_var;
+						print "$1 => $root_hash{$dbname}{$sl}{$1} \n";
+					} 
+				}
+			}
+		}
+	}
+}
+
+=begin
 {
 open (INPUT_LOG,'<',$input_log) or die "print $!"; #Put all the log inside the array test_array.
 	local $/ = "\n\n";#REGEX per line will not work on some logs due to wrong location. Restore point and Instance pre-check is not on its own block--they are on the same block, if there are multiple DB.  
@@ -272,6 +394,9 @@ close (INPUT_LOG);
 foreach (@instance_precheck) {
 	print "\"$_\":\"$root_hash{'db[2]'}{'Instance Pre-checks'}{$_}\"\n";
 }
+
+
+=cut
 
 foreach (@db_name) {
 	next if ( $root_hash{$_}{Local_instance} eq 'NULL' );
