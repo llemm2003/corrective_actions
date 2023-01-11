@@ -40,7 +40,7 @@ my %root_hash; #This hash will contain all the information captured from the log
 my (@db_name,@test_array,@db_instance_status,@instance_precheck);#test_array contains the log. 
 my @top_layer=qw/name Local_instance Database_role FAL_SERVER is_CDB PDBS/;
 my @second_layer=('Database Instance Status','Instance Pre-checks','Database Restore Points','Tablespace Checks','Database components','PDB Validation','Backup Validation','Database Parameter Checks','Server Checks'
-,'Cluster Status','Correct patches applied to DB Home (local node)','Upgrade Pre-Checks');
+,'Cluster Status','Correct patches applied to DB Home (local node)','Upgrade Pre-Checks','Space Checks (OS)','Free Space in ASM','OPC User Setup');
 =begin
 ,,'Database objects'
 ,'Some components have FAILED');#I need the space in the string
@@ -270,11 +270,20 @@ $root_hash{regex}{'Upgrade Pre-Checks'}{main}=qr/$stg_regex/;
 $stg_regex='^\s+((?:[\w]+\s)+[\w]+(?:.sh|[\d.]+)?)[\s.]+(PASSED|FAILED[\w\s\-.:\/,()]+\b|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.:\/,()]+)';
 $root_hash{regex}{'Upgrade Pre-Checks'}{second}=qr/$stg_regex/;
 
-$stg_regex='Space Checks (OS)';
+$stg_regex='Space Checks \(OS\)';
 $root_hash{regex}{'Space Checks (OS)'}{main}=qr/$stg_regex/;
-$stg_regex='^\s+((?:[\w]+\s)+[\w]+(?:.sh|[\d.]+)?)[\s.]+(PASSED|FAILED[\w\s\-.:\/,()]+\b|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.:\/,()]+)';
+$stg_regex='^\s+([\w\s]+(?:\/[\w\s]+|(?:\.p[a-z_]+))?)[\s\.]+(PASSED|FAILED[\w\s\-.:\/,()]+\b|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.:\/,()]+)';
 $root_hash{regex}{'Space Checks (OS)'}{second}=qr/$stg_regex/;
 
+$stg_regex='Free Space in ASM';
+$root_hash{regex}{'Free Space in ASM'}{main}=qr/$stg_regex/;
+$stg_regex='^\s+([\w\s]+(?:\/[\w\s]+|(?:\.p[a-z_]+))?)[\s\.]+(PASSED|FAILED[\w\s\-.:\/,()]+\b|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.:\/,()]+)';
+$root_hash{regex}{'Free Space in ASM'}{second}=qr/$stg_regex/;
+
+$stg_regex='OPC User Setup';
+$root_hash{regex}{'OPC User Setup'}{main}=qr/$stg_regex/;
+$stg_regex='^\s+([\w\s\(\)]+)\.+\s(PASSED|FAILED[\w\s\-.:\/,()]+\b|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.:\/,()]+)';
+$root_hash{regex}{'OPC User Setup'}{second}=qr/$stg_regex/;
 
 foreach my $dbname (@db_name) {
 	print "$dbname - working here \n";
