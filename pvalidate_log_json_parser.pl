@@ -39,7 +39,8 @@ my $input_log=$ARGV[0];
 my %root_hash; #This hash will contain all the information captured from the logfile. 
 my (@db_name,@test_array,@db_instance_status,@instance_precheck);#test_array contains the log. 
 my @top_layer=qw/name Local_instance Database_role FAL_SERVER is_CDB PDBS/;
-my @second_layer=('Database Instance Status','Instance Pre-checks','Database Restore Points','Tablespace Checks','Database components','PDB Validation','Backup Validation','Database Parameter Checks','Server Checks','Cluster Status','Correct patches applied to DB Home (local node)',);
+my @second_layer=('Database Instance Status','Instance Pre-checks','Database Restore Points','Tablespace Checks','Database components','PDB Validation','Backup Validation','Database Parameter Checks','Server Checks'
+,'Cluster Status','Correct patches applied to DB Home (local node)','Upgrade Pre-Checks');
 =begin
 ,,'Database objects'
 ,'Some components have FAILED');#I need the space in the string
@@ -259,10 +260,21 @@ $root_hash{regex}{'Cluster Status'}{main}=qr/$stg_regex/;
 $stg_regex='^\s+([\s()\w-]+)\s\.+\s(PASSED|FAILED[\w\s\-.:\/,()]+|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.:\/,()]+)';
 $root_hash{regex}{'Cluster Status'}{second}=qr/$stg_regex/;
 
-$stg_regex='Correct patches applied to DB Home (local node)';
+$stg_regex='Correct patches applied to DB Home \(local node\)';
 $root_hash{regex}{'Correct patches applied to DB Home (local node)'}{main}=qr/$stg_regex/;
 $stg_regex='^\s+(Patch\s[\d]+)\s\.+\s(PASSED|FAILED[\w\s\-.:\/,()]+|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.:\/,()]+)';
 $root_hash{regex}{'Correct patches applied to DB Home (local node)'}{second}=qr/$stg_regex/;
+
+$stg_regex='Upgrade Pre-Checks';
+$root_hash{regex}{'Upgrade Pre-Checks'}{main}=qr/$stg_regex/;
+$stg_regex='^\s+((?:[\w]+\s)+[\w]+(?:.sh|[\d.]+)?)[\s.]+(PASSED|FAILED[\w\s\-.:\/,()]+\b|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.:\/,()]+)';
+$root_hash{regex}{'Upgrade Pre-Checks'}{second}=qr/$stg_regex/;
+
+$stg_regex='Space Checks (OS)';
+$root_hash{regex}{'Space Checks (OS)'}{main}=qr/$stg_regex/;
+$stg_regex='^\s+((?:[\w]+\s)+[\w]+(?:.sh|[\d.]+)?)[\s.]+(PASSED|FAILED[\w\s\-.:\/,()]+\b|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.:\/,()]+)';
+$root_hash{regex}{'Space Checks (OS)'}{second}=qr/$stg_regex/;
+
 
 foreach my $dbname (@db_name) {
 	print "$dbname - working here \n";
