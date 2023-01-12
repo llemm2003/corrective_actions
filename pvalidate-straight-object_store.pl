@@ -12,8 +12,8 @@ my $rclone_keys='[FBGBU_SSDP_saas_migration]
 type = s3
 provider = Other
 env_auth = false
-access_key_id = 6aa98d0a9a512b59b02636564e8344c0e2b51199
-secret_access_key = FxAnSaQdaggyw5ytpWTgnr9/awOWV/kuU/ppRhoM970=
+access_key_id = xxxxxxxxx
+secret_access_key = xxxxxx
 region = us-ashburn-1
 endpoint = https://oraclegbuprod.compat.objectstorage.us-ashburn-1.oraclecloud.com
 location_constraint =
