@@ -37,15 +37,16 @@ my $input_log=$ARGV[0];
 
 #Global Variable for json.
 my %root_hash; #This hash will contain all the information captured from the logfile. 
-my (@db_name,@test_array,@db_instance_status,@instance_precheck);#test_array contains the log. 
+my (@db_name,@test_array,@db_instance_status,@instance_precheck,@pdb_violation);#test_array contains the log. 
 my @top_layer=qw/name Local_instance Database_role FAL_SERVER is_CDB PDBS/;
-my @second_layer=('Database Instance Status','Instance Pre-checks','Database Restore Points','Tablespace Checks','Database components','PDB Validation','Backup Validation','Database Parameter Checks','Server Checks'
-,'Cluster Status','Correct patches applied to DB Home (local node)','Upgrade Pre-Checks','Space Checks (OS)','Free Space in ASM','OPC User Setup');
+my @second_layer=('Database Instance Status','Instance Pre-checks','Database Restore Points','Tablespace Checks','Database components','Backup Validation','Database Parameter Checks','Server Checks','Cluster Status',
+'Correct patches applied to DB Home (local node)','Upgrade Pre-Checks','Space Checks (OS)','Free Space in ASM','OPC User Setup','Database objects','PDB Validation');#Second layer simple regex for that block. 
 =begin
-,,'Database objects'
+,,
 ,'Some components have FAILED');#I need the space in the string
 =cut
-my @third_layer=('Cluster Status','Correct patches applied to DB Home (local node)','Upgrade Pre-Checks','Space Checks (OS)','Free Space in ASM','OPC User Setup','Server Checks');
+my @third_layer=('Cluster Status','Correct patches applied to DB Home (local node)','Upgrade Pre-Checks','Space Checks (OS)','Free Space in ASM','OPC User Setup','Server Checks');#Third layer means more regex. 
+my @fourth_layer=('PDB Validation'); #Fourth layer just means more regex and more blocks from the log to process. 
 my ($regex,$stg_regex); #regex and regex staging variable. 
 #Global variable for json print. 
 my $begin_j='FALSE'; #Will be set to true once the json print starts. 
@@ -151,6 +152,19 @@ sub check_if_exists {
 	} 
 	return $output;
 }
+
+#print json array object. Defined variable array in global is required. 
+sub json_array {
+	my @stg_array=@{$_[0]};
+	my $stg_string="\[";
+	for my $i (0..$#stg_array) {
+		if ( $i == $#stg_array ) {
+			$stg_string="$stg_string" . "\"$stg_array[$i]\"\]";
+		} else {$stg_string="$stg_string" . "\"$stg_array[$i]\","; }
+	}
+	return $stg_string;
+}
+
 ############MAIN############
 
 @test_array=open_object("$input_log",'<');
@@ -239,6 +253,10 @@ $stg_regex='PDB Validation';
 $root_hash{regex}{'PDB Validation'}{main}=qr/$stg_regex/;
 $stg_regex='^\s+((?:PDBs\sin|PDB\sPlug-In)[\s\w()]+)\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING[\w\s\-.]+|INTERMEDIATE[\w\s\-.]+)';
 $root_hash{regex}{'PDB Validation'}{second}=qr/$stg_regex/;
+$stg_regex='^\s+(PDB\s+MESSAGE)';
+$root_hash{regex}{'PDB Validation'}{third}=qr/$stg_regex/;
+$stg_regex='^\s+([A-Z0-9]{4,25}.*)';
+$root_hash{regex}{'PDB Validation'}{fourth}=qr/$stg_regex/;
 
 $stg_regex='Backup Validation';
 $root_hash{regex}{'Backup Validation'}{main}=qr/$stg_regex/;
@@ -304,7 +322,20 @@ foreach my $dbname (@db_name) {
 				}
 			close (INPUT_LOG);
 		}
-		print "found block for $sl: \n $root_hash{block}{$sl} -- HERE\n";
+		if (check_if_exists("$sl",\@fourth_layer)) { print "$sl is FOUND!!!!!!!!\n";
+			{
+				open (INPUT_LOG,'<',$input_log) or die "print $!"; #Put all the log inside the array test_array.
+				local $/ = "\n\n";#REGEX per line will not work on some logs due to wrong location. Restore point and Instance pre-check is not on its own block--they are on the same block, if there are multiple DB.  
+				while (<INPUT_LOG>) {
+					if ( $_ =~ /$root_hash{regex}{$sl}{third}/ ) {
+						$root_hash{block2}{$sl}=$_;
+					} 
+				}
+				close (INPUT_LOG);
+			}
+		}
+		#print "found block for $sl: \n $root_hash{block}{$sl} -- HERE\n";
+		#print "second block for $sl ==>  $root_hash{block2}{$sl} --HERE2\n";
 		
 		{
 			open (TEMP_LOG,'<',\$root_hash{block}{$sl}) or die "print $!"; #Put all the log inside the array test_array.
@@ -316,9 +347,6 @@ foreach my $dbname (@db_name) {
 				push(@test,$x);
 			}
 			close (TEMP_LOG);
-			#print "$regex - REGEX USED\n";
-			#print "$root_hash{regex}{$sl}{second} \n";
-			#print "$_" for @test;
 			my $signal='FALSE';
 			foreach my $test_var (@test) {
 				if ( $test_var=~/$regex/ ) { $signal='TRUE';next;}
@@ -332,93 +360,29 @@ foreach my $dbname (@db_name) {
 					} 
 				}
 			}
+			if (exists $root_hash{block2}{$sl}) {
+				my @test;
+				{
+					open (TEMP_LOG,'<',\$root_hash{block2}{$sl}) or die "print $!"; #Put all the log inside the array test_array.
+					local $/="\n"; #just make sure that the operation is by line not by block. 
+					while (<TEMP_LOG>) {
+						my $x=$_;
+						$x=~s/\e\[[0-9;]*m(?:\e\[K)?//g;
+						chomp($x);
+						push(@test,$x);
+					}
+					close (TEMP_LOG);
+				}
+				foreach my $test_var (@test) {
+					if ( $test_var =~ /$root_hash{regex}{$sl}{fourth}/ ) {
+						push(@pdb_violation, $1);
+					}
+				}
+			}
 		}
 	}
 }
-
 =begin
-{
-open (INPUT_LOG,'<',$input_log) or die "print $!"; #Put all the log inside the array test_array.
-	local $/ = "\n\n";#REGEX per line will not work on some logs due to wrong location. Restore point and Instance pre-check is not on its own block--they are on the same block, if there are multiple DB.  
-	while (<INPUT_LOG>) {
-		if ( $_ =~ /Database Instance Status/ ) {
-			$root_hash{block}{'Database Instance Status'}=$_;
-		}
-	}
-close (INPUT_LOG);
-}
-
-{		
-	open (TEMP_LOG,'<',\$root_hash{block}{'Database Instance Status'}) or die "print $!"; #Put all the log inside the array test_array.
-	local $/="\n"; #just make sure that the operation is by line not by block. 
-	my @test;
-	while (<TEMP_LOG>) {
-		my $x=$_;
-		$x=~s/\e\[[0-9;]*m(?:\e\[K)?//g;
-		push(@test,$x);
-	}
-	close (TEMP_LOG);
-
-	my $signal='FALSE';
-	foreach (@test) {
-		if (/p00trj0_fra248/) { $signal='TRUE'; next;}
-		if ($signal eq 'TRUE' and ! /-/ and ! /$^/) {
-			if ( $_ =~ /(Instance\s[\w]+\sup\s).+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)/) {
-				push(@db_instance_status,$1);
-				$root_hash{'db[2]'}{'Database Instance Status'}{$1}=$2;
-			} 
-		}
-	}
-}
-		
-foreach (@db_instance_status) {
-	print "\"$_\":\"$root_hash{'db[2]'}{'Database Instance Status'}{$_}\"\n";
-}
-
-
-{#The instance pre-check output is not in the correct place if there are multiple DB. So this have to be manual.
-	my $input=$_[0];
-	open (INPUT_LOG,'<',$input_log) or die "print $!"; 
-	local $/ = "\n\n";
-	while (<INPUT_LOG>) {
-		if ( /p00trj0_fra248/ and /Spfile in use/  ) {
-			$root_hash{block}{'Instance Pre-checks'}=$_;
-		}
-	}
-close (INPUT_LOG);
-}
-
-{		
-	open (TEMP_LOG,'<',\$root_hash{block}{'Instance Pre-checks'}) or die "print $!"; #Put all the log inside the array test_array.
-	local $/="\n"; #just make sure that the operation is by line not by block. 
-	my @test;
-	while (<TEMP_LOG>) {
-		my $x=$_;
-		$x=~s/\e\[[0-9;]*m(?:\e\[K)?//g;
-		push(@test,$x);
-	}
-	close (TEMP_LOG);
-
-	my $signal='FALSE';
-	foreach (@test) {
-		if (/p00trj0_fra248/) { $signal='TRUE'; next;}
-		if ($signal eq 'TRUE' and ! /-/ and ! /$^/) {
-			if ( $_ =~ /(Spfile\sin\suse|AMM\ssize|SGA\ssize)\s\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)/) {
-				push(@instance_precheck,$1);
-				$root_hash{'db[2]'}{'Instance Pre-checks'}{$1}=$2;
-			} 
-		}
-	}
-	
-}
-
-foreach (@instance_precheck) {
-	print "\"$_\":\"$root_hash{'db[2]'}{'Instance Pre-checks'}{$_}\"\n";
-}
-
-
-=cut
-
 foreach (@db_name) {
 	next if ( $root_hash{$_}{Local_instance} eq 'NULL' );
 	print_to_json("1" , 'LINE', "$root_hash{$_}{name}");
@@ -440,3 +404,4 @@ foreach (@db_name) {
 		}
 	}
 }
+=cut
