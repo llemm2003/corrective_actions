@@ -25,6 +25,8 @@ Database Instance Status.
 (Instance\s[\w]+\sup\s).+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)
 Instance Pre-checks
 (Spfile\sin\suse|AMM\ssize|SGA\ssize)\s\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)
+Database objects
+^\s+(Internal\sOracle\sdatabase\sobjects\svalid|Application\sschema\sobjects\svalid)\s\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING[\w\s\-.]+|INTERMEDIATE[\w\s\-.]+)
 =cut REGEX
 
 =begin TODO
@@ -39,14 +41,16 @@ my $input_log=$ARGV[0];
 my %root_hash; #This hash will contain all the information captured from the logfile. 
 my (@db_name,@test_array,@db_instance_status,@instance_precheck,@pdb_violation);#test_array contains the log. 
 my @top_layer=qw/name Local_instance Database_role FAL_SERVER is_CDB PDBS/;
-my @second_layer=('Database Instance Status','Instance Pre-checks','Database Restore Points','Tablespace Checks','Database components','Backup Validation','Database Parameter Checks','Server Checks','Cluster Status',
-'Correct patches applied to DB Home (local node)','Upgrade Pre-Checks','Space Checks (OS)','Free Space in ASM','OPC User Setup','Database objects','PDB Validation');#Second layer simple regex for that block. 
+my @second_layer=('Database Instance Status','Instance Pre-checks','Database Restore Points','Tablespace Checks','Database components','Backup Validation','Database Parameter Checks','Server Checks'
+,'Cluster Status','Correct patches applied to DB Home (local node)','Upgrade Pre-Checks','Space Checks (OS)','Free Space in ASM','OPC User Setup','Database objects','PDB Validation');#Second layer simple regex for that block. 
 =begin
 ,,
 ,'Some components have FAILED');#I need the space in the string
 =cut
 my @third_layer=('Cluster Status','Correct patches applied to DB Home (local node)','Upgrade Pre-Checks','Space Checks (OS)','Free Space in ASM','OPC User Setup','Server Checks');#Third layer means more regex. 
-my @fourth_layer=('PDB Validation'); #Fourth layer just means more regex and more blocks from the log to process. 
+my @fourth_layer=('PDB Validation','Database objects'); #Fourth layer just means more regex and more blocks from the log to process. 
+my @fifth_layer=('Violation','Application and System Invalid Object');#This values in this array is for PDB Violation keys, this signifies that the value of this key is an json array => [].
+my @sixth_layer=('Database objects'); #The values here means that this keys are on multiple blocks hence just do a full file search. Invalid app schema objects and invalid sys objects. 
 my ($regex,$stg_regex); #regex and regex staging variable. 
 #Global variable for json print. 
 my $begin_j='FALSE'; #Will be set to true once the json print starts. 
@@ -69,6 +73,7 @@ sub search_info {
 		return 'NULL';
 	} else {return $y1;}
 }
+
 
 sub search_info2 { #for array. I will not compress it right now.
 	my @stg_array_in=@{$_[0]};
@@ -96,16 +101,24 @@ sub print_to_json {
 		print "\{\n\t";
 		print "\"$input_keys[2]\":\{\n";
 	} else {
-		for my $i (1..$input_num) {
-			print "\t";
-		}
-		if ( $input_keys[1] eq 'START_NEW'){
-			print "\"$input_keys[2]\":\{\n";
-			#print "\},\n";
-		} elsif ($input_keys[1] eq 'LINE') {
-			print "\"$input_keys[2]\":\"$input_keys[3]\",\n";
-		} elsif ($input_keys[1] eq 'END_LINE') {
-			print "\"$input_keys[2]\":\"$input_keys[3]\"\},\n";
+	if ($input_num eq 'END_ALL') { print "\n\}\}";}
+		else {
+			for my $i (1..$input_num) {
+				print "\t";
+			}
+			if ( $input_keys[1] eq 'START_NEW'){
+				print "\"$input_keys[2]\":\{\n";
+			} elsif ($input_keys[1] eq 'LINE') {
+				print "\"$input_keys[2]\":\"$input_keys[3]\",\n";
+			} elsif ($input_keys[1] eq 'END_LINE') {
+				print "\"$input_keys[2]\":\"$input_keys[3]\"\},\n";
+			} elsif ($input_keys[1] eq 'ARRAY') {
+				print "\"$input_keys[2]\":$input_keys[3]\n";
+			} elsif ($input_keys[1] eq 'END_ARRAY') {
+				print "\"$input_keys[2]\":$input_keys[3]\},\n";
+			} elsif ($input_keys[1] eq 'END_ARRAY_ALL') {
+				print "\"$input_keys[2]\":$input_keys[3]\}\n";
+			}
 		}
 	}
 }
@@ -165,6 +178,19 @@ sub json_array {
 	return $stg_string;
 }
 
+sub full_file_search {#This is for full file search. The major search pattern in this script is divided per block. However this 
+	my @stg_log=open_object("$input_log",'<');
+	my $input=$_[0]; # This is a quoted regex string.
+	my $dbname=$_[1];
+	my $sl=$_[2];
+	foreach (@stg_log) {
+		chomp;
+		if ( $_ =~ /$input/ ) {
+			$root_hash{$dbname}{$sl}{$1}=$2;
+		#print "$1 ------ $2 \n";
+		}
+	}
+}
 ############MAIN############
 
 @test_array=open_object("$input_log",'<');
@@ -188,6 +214,7 @@ foreach (@db_name) {#Start gathering information on top layer which is the keywo
 	$root_hash{$_}{PDBS}=search_info(\@test_array , "$stg_regex" );
 }
 
+=begin
 #Check value section:
 foreach (@db_name) {
 	for my $i (0..$#top_layer) {
@@ -218,7 +245,7 @@ foreach my $i (0..$#test_array) {
 }
 =cut
 #Try using block read.
-#REGEX declaration and quotation. 
+#BEGIN REGEX declaration and quotation. 
 $stg_regex='Database Instance Status';
 $root_hash{regex}{'Database Instance Status'}{main}=qr/$stg_regex/;
 $stg_regex='(Instance\s[\w]+\sup\s).+\s(PASSED|FAILED[\w\s\-.]+|WARNING|INTERMEDIATE)';
@@ -246,8 +273,12 @@ $root_hash{regex}{'Database components'}{second}=qr/$stg_regex/;
 
 $stg_regex='Database objects';
 $root_hash{regex}{'Database objects'}{main}=qr/$stg_regex/;
-$stg_regex='^\s+(Internal\sOracle\sdatabase\sobjects\svalid|Application\sschema\sobjects\svalid)\s\.+\s(PASSED|FAILED[\w\s\-.]+|WARNING[\w\s\-.]+|INTERMEDIATE[\w\s\-.]+)';
+$stg_regex='^\s+(Internal\sOracle\sdatabase\sobjects\svalid|Application\sschema\sobjects\svalid)[\s.]+(PASSED|FAILED[\w\s\-.:\/,()]+\b|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.:\/,()]+)';
 $root_hash{regex}{'Database objects'}{second}=qr/$stg_regex/;
+$stg_regex='.*'; #LOL for now. 
+$root_hash{regex}{'Database objects'}{third}=qr/$stg_regex/;
+$stg_regex='^\s+([A-Z\d_]{4,25}[\s]+[A-Z\d_]{3,50}\s.*)';
+$root_hash{regex}{'Database objects'}{fourth}=qr/$stg_regex/;
 
 $stg_regex='PDB Validation';
 $root_hash{regex}{'PDB Validation'}{main}=qr/$stg_regex/;
@@ -255,7 +286,7 @@ $stg_regex='^\s+((?:PDBs\sin|PDB\sPlug-In)[\s\w()]+)\.+\s(PASSED|FAILED[\w\s\-.]
 $root_hash{regex}{'PDB Validation'}{second}=qr/$stg_regex/;
 $stg_regex='^\s+(PDB\s+MESSAGE)';
 $root_hash{regex}{'PDB Validation'}{third}=qr/$stg_regex/;
-$stg_regex='^\s+([A-Z0-9]{4,25}.*)';
+$stg_regex='^\s+([A-Z0-9]{5,25}(\s)+[A-Z]{1}[a-z.\s]+.*)';
 $root_hash{regex}{'PDB Validation'}{fourth}=qr/$stg_regex/;
 
 $stg_regex='Backup Validation';
@@ -302,17 +333,18 @@ $stg_regex='OPC User Setup';
 $root_hash{regex}{'OPC User Setup'}{main}=qr/$stg_regex/;
 $stg_regex='^\s+([\w\s\(\)]+)\.+\s(PASSED|FAILED[\w\s\-.:\/,()]+\b|WARNING[\w\s\-.:\/,()]+|INFORMATIONAL[\w\s\-.:\/,()]+)';
 $root_hash{regex}{'OPC User Setup'}{second}=qr/$stg_regex/;
+#END Regex
 
 foreach my $dbname (@db_name) {
-	print "$dbname - working here \n";
+	#print "$dbname - working here \n";
 	next if (  $root_hash{$dbname}{Local_instance} eq 'NULL' );
-	print "$root_hash{$dbname}{name} ----HERE \n";
+	#print "$root_hash{$dbname}{name} ----HERE \n";
 	my $stg_regex=$root_hash{$dbname}{name};
 	my $regex=qr/$stg_regex/;
 	my @temp_array;
 	foreach my $sl (@second_layer) {
 		{
-			print "$root_hash{regex}{$sl}{main} ---MAIN REGEX\n ";
+			#print "$root_hash{regex}{$sl}{main} ---MAIN REGEX\n ";
 			open (INPUT_LOG,'<',$input_log) or die "print $!"; #Put all the log inside the array test_array.
 				local $/ = "\n\n";#REGEX per line will not work on some logs due to wrong location. Restore point and Instance pre-check is not on its own block--they are on the same block, if there are multiple DB.  
 				while (<INPUT_LOG>) {
@@ -322,16 +354,23 @@ foreach my $dbname (@db_name) {
 				}
 			close (INPUT_LOG);
 		}
-		if (check_if_exists("$sl",\@fourth_layer)) { print "$sl is FOUND!!!!!!!!\n";
+		if (check_if_exists("$sl",\@fourth_layer)) { #print "$sl is FOUND!!!!!!!!\n";
 			{
-				open (INPUT_LOG,'<',$input_log) or die "print $!"; #Put all the log inside the array test_array.
-				local $/ = "\n\n";#REGEX per line will not work on some logs due to wrong location. Restore point and Instance pre-check is not on its own block--they are on the same block, if there are multiple DB.  
-				while (<INPUT_LOG>) {
-					if ( $_ =~ /$root_hash{regex}{$sl}{third}/ ) {
-						$root_hash{block2}{$sl}=$_;
-					} 
+				my @stg_array;
+				foreach (@test_array) {
+					chomp;
+					my $x;$x=$_;
+					if ( $x =~ /$root_hash{regex}{$sl}{fourth}/ ) {
+						$x=~s/^\s+//;
+						push(@stg_array,$x);
+					}
 				}
-				close (INPUT_LOG);
+				my $xxx=json_array(\@stg_array);
+				if ($sl eq 'PDB Validation'  ) {
+					$root_hash{$dbname}{$sl}{'Violation'}=$xxx;
+				} elsif ($sl eq 'Database objects') {
+					$root_hash{$dbname}{$sl}{'Application and System Invalid Object'}=$xxx;
+				}
 			}
 		}
 		#print "found block for $sl: \n $root_hash{block}{$sl} -- HERE\n";
@@ -352,56 +391,48 @@ foreach my $dbname (@db_name) {
 				if ( $test_var=~/$regex/ ) { $signal='TRUE';next;}
 				if (check_if_exists("$sl",\@third_layer)) { $signal='TRUE';}
 				if ( $signal eq 'TRUE' ) {
-					if ( $test_var =~ /$root_hash{regex}{$sl}{second}/ ) {
+					if ( check_if_exists("$sl",\@sixth_layer)) {
+						full_file_search("$root_hash{regex}{$sl}{second}","$dbname","$sl");
+					} elsif ( $test_var =~ /$root_hash{regex}{$sl}{second}/ ) {
 						push(@temp_array,$1);
 						my $temp_var=$2;chomp($temp_var);
 						$root_hash{$dbname}{$sl}{$1}=$temp_var;
-						print "$1 => $root_hash{$dbname}{$sl}{$1} \n";
+						#print "$1 => $root_hash{$dbname}{$sl}{$1} \n";
 					} 
-				}
-			}
-			if (exists $root_hash{block2}{$sl}) {
-				my @test;
-				{
-					open (TEMP_LOG,'<',\$root_hash{block2}{$sl}) or die "print $!"; #Put all the log inside the array test_array.
-					local $/="\n"; #just make sure that the operation is by line not by block. 
-					while (<TEMP_LOG>) {
-						my $x=$_;
-						$x=~s/\e\[[0-9;]*m(?:\e\[K)?//g;
-						chomp($x);
-						push(@test,$x);
-					}
-					close (TEMP_LOG);
-				}
-				foreach my $test_var (@test) {
-					if ( $test_var =~ /$root_hash{regex}{$sl}{fourth}/ ) {
-						push(@pdb_violation, $1);
-					}
 				}
 			}
 		}
 	}
 }
-=begin
+
 foreach (@db_name) {
 	next if ( $root_hash{$_}{Local_instance} eq 'NULL' );
 	print_to_json("1" , 'LINE', "$root_hash{$_}{name}");
 	for my $i (0..$#top_layer) {
 		print_to_json("2",'LINE',"$top_layer[$i]","$root_hash{$_}{$top_layer[$i]}");
 	}
-	foreach my $j (@second_layer) {
+	foreach my $j (0..$#second_layer) {
 		my @temp_arr;
 		my $temp_key;
-		print_to_json("2",'START_NEW',"$j");
-		foreach $temp_key (keys $root_hash{$_}{$j}) {
+		print_to_json("2",'START_NEW',"$second_layer[$j]");
+		foreach $temp_key (keys $root_hash{$_}{$second_layer[$j]}) {
 			push(@temp_arr,$temp_key);
 		}
 		for my $i (0..$#temp_arr) {
-			if ($i == $#temp_arr) {
-				print_to_json("3",'END_LINE',"$temp_arr[$i]","$root_hash{$_}{$j}{$temp_arr[$i]}");
-			} else {print_to_json("3",'LINE',"$temp_arr[$i]","$root_hash{$_}{$j}{$temp_arr[$i]}");}
-			
+			if ( $i == $#temp_arr) {
+				if (check_if_exists("$temp_arr[$i]",\@fifth_layer)) {
+					if ( $j == $#second_layer) {
+						print_to_json("3",'END_ARRAY_ALL',"$temp_arr[$i]","$root_hash{$_}{$second_layer[$j]}{$temp_arr[$i]}");	
+					} else {
+						print_to_json("3",'END_ARRAY',"$temp_arr[$i]","$root_hash{$_}{$second_layer[$j]}{$temp_arr[$i]}");	
+					}
+				} else {print_to_json("3",'END_LINE',"$temp_arr[$i]","$root_hash{$_}{$second_layer[$j]}{$temp_arr[$i]}");}
+			} else { 
+				if (check_if_exists("$temp_arr[$i]",\@fifth_layer)) {
+						print_to_json("3",'ARRAY',"$temp_arr[$i]","$root_hash{$_}{$second_layer[$j]}{$temp_arr[$i]}");
+				} else {print_to_json("3",'LINE',"$temp_arr[$i]","$root_hash{$_}{$second_layer[$j]}{$temp_arr[$i]}");}
+			}
 		}
 	}
+	print_to_json('END_ALL');
 }
-=cut
