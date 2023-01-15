@@ -49,7 +49,7 @@ my @second_layer=('Database Instance Status','Instance Pre-checks','Database Res
 =cut
 my @third_layer=('Cluster Status','Correct patches applied to DB Home (local node)','Upgrade Pre-Checks','Space Checks (OS)','Free Space in ASM','OPC User Setup','Server Checks');#Third layer means more regex. 
 my @fourth_layer=('PDB Validation','Database objects'); #Fourth layer just means more regex and more blocks from the log to process. 
-my @fifth_layer=('Violation','Application and System Invalid Object');#This values in this array is for PDB Violation keys, this signifies that the value of this key is an json array => [].
+my @fifth_layer=('Violation','Application and System Invalid Object');#This values in this array is for PDB Violation keys and invalid objects, this signifies that the value of this key is an json array => []. For now this is separated because json array is still hard to integrate. 
 my @sixth_layer=('Database objects'); #The values here means that this keys are on multiple blocks hence just do a full file search. Invalid app schema objects and invalid sys objects. 
 my ($regex,$stg_regex); #regex and regex staging variable. 
 #Global variable for json print. 
@@ -166,7 +166,15 @@ sub check_if_exists {
 	return $output;
 }
 
-#print json array object. Defined variable array in global is required. 
+=begin json_array comment.
+This procedure just produces json array object.
+ex in violation: 
+PDB13456     Tablespace SYSAUX is not encrypted. Oracle Cloud mandates all tablespaces should be encrypted.
+PDB13456     Tablespace SYSTEM is not encrypted. Oracle Cloud mandates all tablespaces should be encrypted.
+This function will output:
+["PDB13456     Tablespace SYSAUX is not encrypted. Oracle Cloud mandates all tablespaces should be encrypted.","PDB13456     Tablespace SYSTEM is not encrypted. Oracle Cloud mandates all tablespaces should be encrypted."]
+Defined variable array in global is required. 
+=cut json_array comment
 sub json_array {
 	my @stg_array=@{$_[0]};
 	my $stg_string="\[";
@@ -178,7 +186,8 @@ sub json_array {
 	return $stg_string;
 }
 
-sub full_file_search {#This is for full file search. The major search pattern in this script is divided per block. However this 
+#The full_file_search will match the whole file(already inserted to an array) for the regex(should be qr'd already) $_[0]
+sub full_file_search {
 	my @stg_log=open_object("$input_log",'<');
 	my $input=$_[0]; # This is a quoted regex string.
 	my $dbname=$_[1];
@@ -346,7 +355,7 @@ foreach my $dbname (@db_name) {
 		{
 			#print "$root_hash{regex}{$sl}{main} ---MAIN REGEX\n ";
 			open (INPUT_LOG,'<',$input_log) or die "print $!"; #Put all the log inside the array test_array.
-				local $/ = "\n\n";#REGEX per line will not work on some logs due to wrong location. Restore point and Instance pre-check is not on its own block--they are on the same block, if there are multiple DB.  
+				local $/ = "\n\n";#REGEX per line will not work on some logs due to wrong location. Restore point and Instance pre-check is not on its own block--they are on the same block...if there are multiple DB.  
 				while (<INPUT_LOG>) {
 					if ( $_ =~ /$root_hash{regex}{$sl}{main}/ ) {
 						$root_hash{block}{$sl}=$_;
@@ -365,7 +374,7 @@ foreach my $dbname (@db_name) {
 						push(@stg_array,$x);
 					}
 				}
-				my $xxx=json_array(\@stg_array);
+				my $xxx=json_array(\@stg_array);#The xxx variable 
 				if ($sl eq 'PDB Validation'  ) {
 					$root_hash{$dbname}{$sl}{'Violation'}=$xxx;
 				} elsif ($sl eq 'Database objects') {
@@ -373,9 +382,7 @@ foreach my $dbname (@db_name) {
 				}
 			}
 		}
-		#print "found block for $sl: \n $root_hash{block}{$sl} -- HERE\n";
-		#print "second block for $sl ==>  $root_hash{block2}{$sl} --HERE2\n";
-		
+
 		{
 			open (TEMP_LOG,'<',\$root_hash{block}{$sl}) or die "print $!"; #Put all the log inside the array test_array.
 			local $/="\n"; #just make sure that the operation is by line not by block. 
